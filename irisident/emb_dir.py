@@ -37,7 +37,7 @@ def walk_file_or_dir(root):
 def main():                    
     model=ViTExtractor(weights=weights,arch=arch, normalise_features=False)
     model.eval()
-    transform = get_normalisation_resize_torch(im_size=imgsz)
+    transform, im_reader = get_transforms_for_pretrained(modeltype)
     args = {"num_workers": 0, "batch_size": 8}
     imgpath=[]
     labels=[]
