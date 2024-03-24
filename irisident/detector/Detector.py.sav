@@ -1,0 +1,124 @@
+import cv2
+import numpy as np
+from ultralytics import YOLO
+import os
+import argparse
+import sys
+from pathlib import Path
+import yaml
+import torch
+import math
+
+def get_rect(img_box):
+    height, width = img_box.shape[:2]
+    xc = int(width / 2)
+    yc = int(height / 2)
+    r = int(width / 2)
+    p = 0.4
+
+    x1l = int(r * (1 - math.sqrt(1 - math.pow(p, 2))))
+    y1l = yc - int(r * p)
+    if (img_box[y1l, x1l] == [0, 0, 0]).all():
+        Xs = np.nonzero(np.any(img_box[y1l, :], axis=1))
+        x1l = int(Xs[0][0])
+
+    x2l = xc - int(r * p)
+    y2l = yc + int(r * p)
+    if (img_box[y2l, x1l] == [0, 0, 0]).all():
+        Xs = np.nonzero(np.any(img_box[y2l, :], axis=1))
+        x1l = int(Xs[0][0])
+
+    x1r = xc + int(r * p)
+    y1r = yc - int(r * p)
+    x2r = int(r * (1 + math.sqrt(1 - math.pow(p, 2))))
+    y2r = yc + int(r * p)
+    if (img_box[y1r, x2r] == [0, 0, 0]).all():
+        Xs = np.nonzero(np.any(img_box[y1r, :], axis=1))
+        x2r = int(Xs[0][-1])
+    if (img_box[y2r, x2r] == [0, 0, 0]).all():
+        Xs = np.nonzero(np.any(img_box[y2r, :], axis=1))
+        x2r = int(Xs[0][-1])
+
+    return ((x1l, y1l), (x2l, y2l), (x1r, y1r), (x2r, y2r))
+
+
+
+class Detector: 
+    def __init__(self,args): 
+            self.source=args.source
+            self.weights=args.weights
+            self.conf=args.conf
+            self.imgsz=args.imgsz
+            self.outdir=args.outdir
+            self.half=False
+            self.device='cpu'
+            self.model=YOLO(self.weights)
+            self.classes=args.iris_id
+            self.model.to(self.device)
+            self.white = (255, 255, 255)
+            if not os.path.exists(self.outdir): 
+                os.makedirs(self.outdir)
+    def crop(self):  
+        res = self.model.predict(source=self.source,imgsz=self.imgsz,device=self.device,half=self.half,classes=self.classes)
+    # iterate detection results
+        for r in res:
+            img = np.copy(r.orig_img)
+            img = img.astype(np.uint8)
+            img_name = Path(r.path).stem
+            # iterate each object contour
+            c=r[0]
+            
+            for box in c.boxes:
+                #b_mask = np.zeros(img.shape[:2], np.uint8)
+                mask3ch = np.zeros(img.shape, np.uint8)
+                #b_mask = np.zeros(img.shape, np.uint8)
+                #mask3ch = cv2.cvtColor(b_mask, cv2.COLOR_GRAY2BGR)
+                #mask3ch = cv2.merge((b_mask,b_mask,b_mask))
+                # Create contour mask
+                #contour = c.masks.xy.pop().astype(np.int32).reshape(-1, 1, 2)
+                #_ = cv2.drawContours(b_mask, [contour], -1, (255, 255, 255), cv2.FILLED)
+                print('xywh:',box.xywh[0])
+                xc, yc, w, h = map(np.uint8,box.xywh[0].numpy())
+                center = (xc, yc)
+                axes = (w,h)
+                #_ = cv2.ellipse(b_mask,center,axes,0,0,360,self.white,cv2.FILLED)
+                _ = cv2.ellipse(mask3ch,center,axes,0,0,360,self.white,cv2.FILLED)
+                mask3ch = mask3ch.astype(np.uint8)
+
+                # Choose one:
+
+                # OPTION-1: Isolate object with black background
+                #mask3ch = cv2.cvtColor(b_mask, cv2.COLOR_GRAY2BGR)
+                print(mask3ch.shape)
+                isolated = cv2.bitwise_and(img, img,mask = mask3ch)
+                #isolated = cv2.bitwise_and(img,img, mask = mask)
+                #isolated = cv2.bitwise_and(b_mask, img)
+
+                # OPTION-2: Isolate object with transparent background (when saved as PNG)
+                #isolated = np.dstack([img, b_mask])
+
+                # OPTIONAL: detection crop (from either OPT1 or OPT2)
+                x1, y1, x2, y2 = c.boxes.xyxy.cpu().numpy().squeeze().astype(np.int32)
+                iso_crop = isolated[y1:y2, x1:x2]
+                coords = get_rect(iso_crop)
+                x1,y1 = coords[0] 
+                x2,y2 = coords[1]
+                rectl_crop = iso_crop[y1:y2, x1:x2]
+                x1,y1 = coords[2] 
+                x2,y2 = coords[3]
+                rectr_crop = iso_crop[y1:y2, x1:x2]
+
+
+                # TODO your actions go here
+                filename = img_name+'.png'
+                filename_l = img_name+'_l.png'
+                filename_r = img_name+'_r.png'
+                filename = os.path.join(self.outdir,filename)
+                filename_l = os.path.join(self.outdir,filename_l)
+                filename_r = os.path.join(self.outdir,filename_r)
+                cv2.imwrite(filename, iso_crop)
+                cv2.imwrite(filename_l, rectl_crop)
+                cv2.imwrite(filename_r, rectr_crop)
+                print('savemask:',filename)
+                print('save left rect:',filename_l)
+                print('save right rect:',filename_r)
